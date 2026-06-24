@@ -1,0 +1,170 @@
+import { Chat } from "../models/Chat.js";
+import { Conversation } from "../models/Conversation.js";
+import axios from "axios";
+
+export const createChat = async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    const chat = await Chat.create({
+      user: userId,
+    });
+
+    res.json(chat);
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+
+export const getAllChats = async (req, res) => {
+  try {
+    const chats = await Chat.find({ user: req.user._id }).sort({
+      createdAt: -1,
+    });
+
+    res.json(chats);
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+
+export const addConversation = async (req, res) => {
+  try {
+    const chat = await Chat.findById(req.params.id);
+
+    if (!chat)
+      return res.status(404).json({
+        message: "No chat with this id",
+      });
+
+    const conversation = await Conversation.create({
+      chat: chat._id,
+      question: req.body.question,
+      answer: req.body.answer,
+    });
+
+    const updatedChat = await Chat.findByIdAndUpdate(
+      req.params.id,
+      { latestMessage: req.body.question },
+      { new: true }
+    );
+
+    res.json({
+      conversation,
+      updatedChat,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+
+export const generateResponse = async (req, res) => {
+  try {
+    const chat = await Chat.findById(req.params.id);
+    const prompt = req.body.prompt?.trim();
+
+    if (!chat)
+      return res.status(404).json({
+        message: "No chat with this id",
+      });
+
+    if (chat.user.toString() !== req.user._id.toString())
+      return res.status(403).json({
+        message: "Unauthorized",
+      });
+
+    if (!prompt)
+      return res.status(400).json({
+        message: "Prompt is required",
+      });
+
+    if (!process.env.GEMINI_API_KEY)
+      return res.status(500).json({
+        message: "Gemini API key is not configured",
+      });
+
+    const geminiResponse = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        contents: [{ parts: [{ text: prompt }] }],
+      }
+    );
+
+    const answer =
+      geminiResponse.data?.candidates?.[0]?.content?.parts?.[0]?.text ||
+      "I could not generate a response for that prompt.";
+
+    const conversation = await Conversation.create({
+      chat: chat._id,
+      question: prompt,
+      answer,
+    });
+
+    const updatedChat = await Chat.findByIdAndUpdate(
+      req.params.id,
+      { latestMessage: prompt },
+      { new: true }
+    );
+
+    res.json({
+      conversation,
+      updatedChat,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message:
+        error.response?.data?.error?.message ||
+        error.message ||
+        "Something went wrong",
+    });
+  }
+};
+
+export const getConversation = async (req, res) => {
+  try {
+    const conversation = await Conversation.find({ chat: req.params.id });
+
+    if (!conversation)
+      return res.status(404).json({
+        message: "No conversation with this id",
+      });
+
+    res.json(conversation);
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
+
+export const deleteChat = async (req, res) => {
+  try {
+    const chat = await Chat.findById(req.params.id);
+
+    if (!chat)
+      return res.status(404).json({
+        message: "No chat with this id",
+      });
+
+    if (chat.user.toString() !== req.user._id.toString())
+      return res.status(403).json({
+        message: "Unauthorized",
+      });
+
+    await chat.deleteOne();
+
+    res.json({
+      message: "Chat Deleted",
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: error.message,
+    });
+  }
+};
